@@ -1,5 +1,5 @@
 #!/bin/bash
-# 停止新闻爬虫调度器
+# 停止新闻爬虫调度器（杀掉整个守护进程组）
 
 cd "$(dirname "$0")"
 
@@ -22,13 +22,16 @@ if ! kill -0 $PID 2>/dev/null; then
 fi
 
 echo "Stopping scheduler (PID: $PID)..."
-kill $PID
+
+# 杀掉整个进程组（setsid 创建的会话）
+# 先尝试优雅关闭
+kill -- -$PID 2>/dev/null || kill $PID 2>/dev/null
 
 # 等待进程停止
 for i in {1..10}; do
     if ! kill -0 $PID 2>/dev/null; then
-        echo "Scheduler stopped."
-        rm -f logs/scheduler.pid
+        echo "✅ Scheduler stopped."
+        rm -f logs/scheduler.pid logs/_guard_*.sh
         exit 0
     fi
     sleep 1
@@ -36,6 +39,6 @@ done
 
 # 强制停止
 echo "Force stopping scheduler..."
-kill -9 $PID
-rm -f logs/scheduler.pid
+kill -9 -- -$PID 2>/dev/null || kill -9 $PID 2>/dev/null
+rm -f logs/scheduler.pid logs/_guard_*.sh
 echo "Scheduler force stopped."
