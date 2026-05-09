@@ -10,6 +10,8 @@ scheduler:
     - "17:30"
   # 时区
   timezone: "Asia/Shanghai"
+  # 单次任务最大执行时间（秒），超时强制终止，防止阻塞调度器
+  job_timeout: 300
 
 # 爬虫配置
 crawlers:
@@ -45,8 +47,9 @@ llm:
 
 # 飞书通知配置
 feishu:
-  # Webhook 地址
-  webhook_url: "https://open.feishu.cn/open-apis/bot/v2/hook/your-webhook-key"
+  # Webhook 地址列表（支持多个群）
+  webhook_urls:
+    - "https://open.feishu.cn/open-apis/bot/v2/hook/your-webhook-key"
   # 是否启用
   enabled: true
 

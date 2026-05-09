@@ -93,10 +93,10 @@ def run_with_mock():
     logger.info("Mock 新闻已存储到数据库")
 
     # 发送飞书通知
-    if config.feishu.enabled and config.feishu.webhook_url:
+    if config.feishu.enabled and config.feishu.webhook_urls:
         logger.info("正在发送飞书通知...")
         try:
-            notifier = FeishuNotifier(config.feishu.webhook_url)
+            notifier = FeishuNotifier(config.feishu.webhook_urls)
             notifier.send(all_news, title=f"Mock 新闻推送 - {datetime.now().strftime('%Y-%m-%d %H:%M')}")
             logger.info("✅ 飞书通知发送成功")
         except Exception as e:

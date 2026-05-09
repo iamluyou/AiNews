@@ -15,6 +15,7 @@ class Email163Notifier(BaseNotifier):
     """163 邮件通知"""
 
     name = "email_163"
+    default_title = "AI 新闻整理"
 
     def __init__(self, sender: str, password: str, recipients: List[str], sender_name: str = "AI 新闻助手"):
         self.sender = sender

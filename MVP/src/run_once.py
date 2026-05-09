@@ -94,9 +94,9 @@ def run_once():
     if not unsent_news:
         logger.info("所有新闻都是已发送过的，发送提示消息")
         # 发送飞书通知
-        if config.feishu.enabled and config.feishu.webhook_url:
+        if config.feishu.enabled and config.feishu.webhook_urls:
             try:
-                notifier = FeishuNotifier(config.feishu.webhook_url)
+                notifier = FeishuNotifier(config.feishu.webhook_urls)
                 from datetime import datetime
                 # 发送简单提示消息
                 notifier.send([], title=f"新闻推送 - {datetime.now().strftime('%Y-%m-%d %H:%M')}", custom_message="最近没有未推送的新闻了")
@@ -163,12 +163,12 @@ def run_once():
     logger.info(f"将发送 {len(top_news)} 条新闻")
 
     # 发送飞书通知（只发 Top 20）
-    if config.feishu.enabled and config.feishu.webhook_url:
+    if config.feishu.enabled and config.feishu.webhook_urls:
         logger.info("正在发送飞书通知...")
         try:
-            notifier = FeishuNotifier(config.feishu.webhook_url)
+            notifier = FeishuNotifier(config.feishu.webhook_urls)
             from datetime import datetime
-            notifier.send(top_news, title=f"新闻推送 - {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+            notifier.send(top_news, title=f"新闻推送 - {datetime.now().strftime('%Y-%m-%d %H:%M')}", used_llm=used_llm)
             logger.info("飞书通知发送成功")
         except Exception as e:
             logger.error(f"飞书通知发送失败: {e}")

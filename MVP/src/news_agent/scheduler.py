@@ -1,20 +1,56 @@
 from datetime import datetime
 from typing import List, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import signal
+import time
 
 from apscheduler.schedulers.blocking import BlockingScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 from .config import get_config
 from .crawlers import CRAWLER_REGISTRY, BaseCrawler
-from .llm import OpenAIClient, BaseLLM
+from .llm import create_llm_from_config, BaseLLM
 from .models.news import NewsItem
-from .notifiers import FeishuNotifier, Email163Notifier, BaseNotifier
+from .notifiers import create_notifiers_from_config, BaseNotifier
 from .storage import init_db, NewsRepository
 from .utils.logger import get_logger, setup_logger
 from .utils import deduplicate_news_by_url
 
 logger = get_logger(__name__)
+
+# 全局超时标志
+_job_timed_out = False
+
+# 休眠检测：记录上次心跳时间
+_last_heartbeat = time.time()
+_HEARTBEAT_INTERVAL = 30  # 心跳间隔（秒）
+
+
+def _timeout_handler(signum, frame):
+    """SIGALRM 信号处理器"""
+    global _job_timed_out
+    _job_timed_out = True
+    raise TimeoutError("Job execution timed out")
+
+
+def _check_sleep_recovery(check_interval: int = 60, sleep_threshold: int = 120):
+    """检测系统从休眠中恢复，返回是否刚从休眠中唤醒
+
+    Args:
+        check_interval: 正常情况下两次检查的时间差（秒）
+        sleep_threshold: 超过此时间差认为系统休眠过（秒）
+    """
+    global _last_heartbeat
+    now = time.time()
+    elapsed = now - _last_heartbeat
+
+    if elapsed > sleep_threshold:
+        logger.warning(f"System sleep detected! Time gap: {elapsed:.0f}s ({elapsed/3600:.1f}h)")
+        _last_heartbeat = now
+        return True
+
+    _last_heartbeat = now
+    return False
 
 
 class NewsScheduler:
@@ -55,38 +91,11 @@ class NewsScheduler:
                 self.crawlers.append(crawler)
                 logger.info(f"Loaded crawler: {crawler_name}")
 
-        # 初始化通知器
-        if self.config.feishu.enabled and self.config.feishu.webhook_url:
-            self.notifiers.append(FeishuNotifier(self.config.feishu.webhook_url))
-            logger.info("Loaded Feishu notifier")
+        # 初始化通知器（通过工厂函数）
+        self.notifiers = create_notifiers_from_config(self.config)
 
-        if self.config.email_163.enabled and self.config.email_163.sender:
-            self.notifiers.append(
-                Email163Notifier(
-                    sender=self.config.email_163.sender,
-                    sender_name=self.config.email_163.sender_name,
-                    password=self.config.email_163.password,
-                    recipients=self.config.email_163.recipients,
-                )
-            )
-            logger.info("Loaded Email163 notifier")
-
-        # 初始化 LLM
-        if self.config.llm.api_key:
-            self.llm = OpenAIClient(
-                base_url=self.config.llm.base_url,
-                api_key=self.config.llm.api_key,
-                model=self.config.llm.model,
-                max_retries=self.config.llm.max_retries,
-                timeout=self.config.llm.timeout,
-                ranking_prompt=self.config.llm.ranking_prompt,
-                use_llm_for_ranking=self.config.llm.use_llm_for_ranking,
-                batch_size=self.config.llm.batch_size,
-                top_n_per_batch=self.config.llm.top_n_per_batch,
-                final_top_n=self.config.llm.final_top_n,
-                fallback_per_source=self.config.llm.fallback_per_source,
-            )
-            logger.info("Loaded LLM client")
+        # 初始化 LLM（通过工厂函数）
+        self.llm = create_llm_from_config(self.config)
 
     def _fetch_crawler(self, crawler: BaseCrawler) -> List[NewsItem]:
         """执行单个爬虫（用于并发执行）"""
@@ -96,15 +105,45 @@ class NewsScheduler:
         return news_list
 
     def run_job(self):
-        """执行一次完整任务"""
+        """执行一次完整任务（带超时保护）"""
+        global _job_timed_out
+
+        job_timeout = self.config.scheduler.job_timeout
         logger.info("=" * 50)
-        logger.info("Starting news collection job")
+        logger.info(f"Starting news collection job (timeout={job_timeout}s)")
         start_time = datetime.now()
 
+        # 设置 SIGALRM 超时保护（仅 Unix/macOS 支持）
+        _job_timed_out = False
+        try:
+            signal.signal(signal.SIGALRM, _timeout_handler)
+            signal.alarm(job_timeout)
+        except (AttributeError, ValueError):
+            # Windows 或非主线程不支持 SIGALRM，跳过
+            signal_available = False
+        else:
+            signal_available = True
+
+        try:
+            self._run_job_inner(start_time)
+        except TimeoutError:
+            logger.error(f"⚠️ Job timed out after {job_timeout}s, forcing termination!")
+        except Exception as e:
+            logger.error(f"Job failed with error: {e}")
+        finally:
+            # 取消 alarm
+            if signal_available:
+                signal.alarm(0)
+            if _job_timed_out:
+                logger.warning("Job was terminated due to timeout, next schedule will run normally")
+
+    def _run_job_inner(self, start_time: datetime):
+        """任务实际执行逻辑"""
         all_news: List[NewsItem] = []
 
-        # 1. 执行所有爬虫（支持并发）
+        # 1. 执行所有爬虫（支持并发，带超时保护）
         max_workers = min(self.config.crawlers.max_concurrent, len(self.crawlers))
+        crawler_timeout = self.config.crawlers.timeout + 30  # 爬虫超时 + 缓冲
         if max_workers > 1 and len(self.crawlers) > 1:
             logger.info(f"Starting concurrent crawling with {max_workers} workers")
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -114,11 +153,11 @@ class NewsScheduler:
                     for crawler in self.crawlers
                 }
 
-                # 收集结果
-                for future in as_completed(future_to_crawler):
+                # 收集结果（带超时）
+                for future in as_completed(future_to_crawler, timeout=crawler_timeout):
                     crawler = future_to_crawler[future]
                     try:
-                        news_list = future.result()
+                        news_list = future.result(timeout=10)
                         all_news.extend(news_list)
                     except Exception as e:
                         logger.error(f"Crawler {crawler.name} failed: {e}")
@@ -165,7 +204,7 @@ class NewsScheduler:
             logger.info("所有新闻都是已发送过的，发送提示消息")
             for notifier in self.notifiers:
                 try:
-                    notifier.send([], title=f"新闻推送 - {datetime.now().strftime('%Y-%m-%d %H:%M')}", used_llm=False, custom_message="最近没有未推送的新闻了")
+                    notifier.send([], title=f"{notifier.default_title} - {datetime.now().strftime('%Y-%m-%d %H:%M')}", used_llm=False, custom_message="最近没有未推送的新闻了")
                     logger.info(f"{notifier.name} 提示消息发送成功")
                 except Exception as e:
                     logger.error(f"{notifier.name} 提示消息发送失败: {e}")
@@ -191,10 +230,11 @@ class NewsScheduler:
         # 9. 发送通知（都使用整理后的新闻）
         for notifier in self.notifiers:
             try:
-                if isinstance(notifier, FeishuNotifier):
-                    notifier.send(processed_news, title=f"新闻推送 - {datetime.now().strftime('%Y-%m-%d %H:%M')}", used_llm=used_llm)
-                elif isinstance(notifier, Email163Notifier):
-                    notifier.send(processed_news, title=f"AI 新闻整理 - {datetime.now().strftime('%Y-%m-%d %H:%M')}", used_llm=used_llm)
+                notifier.send(
+                    processed_news,
+                    title=f"{notifier.default_title} - {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+                    used_llm=used_llm,
+                )
                 logger.info(f"{notifier.name} 通知发送成功")
             except Exception as e:
                 logger.error(f"Failed to send {notifier.name} notification: {e}")
@@ -210,6 +250,20 @@ class NewsScheduler:
         logger.info(f"Job completed in {duration:.2f} seconds")
         logger.info("=" * 50)
 
+    def _should_run_catchup(self) -> bool:
+        """判断是否需要补偿执行：当前时间是否在某个 cron 时间点附近（±2小时）"""
+        now = datetime.now()
+        current_minutes = now.hour * 60 + now.minute
+
+        for cron_time in self.config.scheduler.cron_times:
+            hour, minute = cron_time.split(":")
+            cron_minutes = int(hour) * 60 + int(minute)
+            # 如果当前时间在 cron 时间点的 2 小时内，说明可能错过了这次任务
+            diff = abs(current_minutes - cron_minutes)
+            if diff <= 120:  # 2小时窗口
+                return True
+        return False
+
     def start(self):
         """启动调度器"""
         # 添加定时任务
@@ -219,17 +273,56 @@ class NewsScheduler:
                 self.run_job,
                 trigger=CronTrigger(hour=int(hour), minute=int(minute)),
                 name=f"NewsJob-{cron_time}",
-                misfire_grace_time=1800,  # 错过任务宽限时间：30分钟
+                misfire_grace_time=7200,  # 错过任务宽限时间：2小时（覆盖休眠场景）
                 coalesce=True,  # 合并错过的任务，只执行一次
                 max_instances=1,  # 同时最多运行1个实例
             )
             logger.info(f"Scheduled job at {cron_time}")
+
+        # 启动时检查是否需要补偿执行（处理休眠醒来后的场景）
+        if self._should_run_catchup():
+            logger.info("Startup catch-up: running missed job now")
+            self.scheduler.add_job(
+                self.run_job,
+                name="CatchUpJob",
+                misfire_grace_time=7200,
+            )
+
+        # 添加休眠检测心跳任务（每分钟检查一次）
+        self.scheduler.add_job(
+            self._sleep_check_job,
+            trigger=CronTrigger(minute="*"),
+            name="SleepCheckJob",
+            misfire_grace_time=7200,
+        )
 
         logger.info("Scheduler started. Press Ctrl+C to stop.")
         try:
             self.scheduler.start()
         except (KeyboardInterrupt, SystemExit):
             logger.info("Scheduler stopped.")
+
+    def _sleep_check_job(self):
+        """定期心跳，检测系统休眠恢复并触发补偿执行"""
+        if _check_sleep_recovery():
+            # 系统刚从休眠中恢复，检查是否需要补偿执行
+            if self._should_run_catchup():
+                logger.info("Sleep recovery: scheduling catch-up job")
+                try:
+                    # 避免重复添加，检查是否已有待执行的 job
+                    existing_jobs = self.scheduler.get_jobs()
+                    has_pending = any(
+                        j.name in ("NewsJob-catchup", "CatchUpJob") and j.next_run_time
+                        for j in existing_jobs
+                    )
+                    if not has_pending:
+                        self.scheduler.add_job(
+                            self.run_job,
+                            name="NewsJob-catchup",
+                            misfire_grace_time=7200,
+                        )
+                except Exception as e:
+                    logger.error(f"Failed to schedule catch-up job: {e}")
 
 
 def main():

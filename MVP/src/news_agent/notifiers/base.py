@@ -11,9 +11,10 @@ class BaseNotifier(ABC):
     """通知基类"""
 
     name: str = ""
+    default_title: str = "新闻推送"  # 默认通知标题
 
     @abstractmethod
-    def send(self, news_list: List[NewsItem], title: str = "") -> bool:
+    def send(self, news_list: List[NewsItem], title: str = "", **kwargs) -> bool:
         """发送通知"""
         pass
 

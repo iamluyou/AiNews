@@ -67,7 +67,7 @@ class TestNotifiers:
         """测试飞书通知器初始化"""
         from news_agent.notifiers.feishu import FeishuNotifier
 
-        notifier = FeishuNotifier(webhook_url="https://example.com/webhook")
+        notifier = FeishuNotifier(webhook_urls=["https://example.com/webhook"])
         assert notifier is not None
         assert notifier.name == "feishu"
 

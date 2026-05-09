@@ -18,6 +18,7 @@ except ImportError:
 class SchedulerConfig(BaseModel):
     cron_times: List[str] = Field(default_factory=lambda: ["08:30", "11:30", "17:30"])
     timezone: str = "Asia/Shanghai"
+    job_timeout: int = 300  # 单次任务最大执行时间（秒），超时强制终止
 
     if PYDANTIC_V2:
         @field_validator("cron_times")
@@ -157,25 +158,27 @@ class LLMConfig(BaseModel):
 
 
 class FeishuConfig(BaseModel):
-    webhook_url: str = ""
+    webhook_urls: List[str] = Field(default_factory=list)
     enabled: bool = True
 
     if PYDANTIC_V2:
-        @field_validator("webhook_url")
+        @field_validator("webhook_urls")
         @classmethod
-        def validate_webhook_url(cls, v, info):
-            """如果启用了飞书，webhook_url 必须有效"""
+        def validate_webhook_urls(cls, v, info):
+            """如果启用了飞书，webhook_urls 必须有效"""
             if info.data.get("enabled") and v:
-                if not (v.startswith("http://") or v.startswith("https://")):
-                    raise ValueError("webhook_url must start with http:// or https://")
+                for url in v:
+                    if not (url.startswith("http://") or url.startswith("https://")):
+                        raise ValueError(f"Invalid webhook URL: {url}")
             return v
     else:
-        @validator("webhook_url")
-        def validate_webhook_url(cls, v, values):
-            """如果启用了飞书，webhook_url 必须有效"""
+        @validator("webhook_urls")
+        def validate_webhook_urls(cls, v, values):
+            """如果启用了飞书，webhook_urls 必须有效"""
             if values.get("enabled") and v:
-                if not (v.startswith("http://") or v.startswith("https://")):
-                    raise ValueError("webhook_url must start with http:// or https://")
+                for url in v:
+                    if not (url.startswith("http://") or url.startswith("https://")):
+                        raise ValueError(f"Invalid webhook URL: {url}")
             return v
 
 

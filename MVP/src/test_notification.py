@@ -49,13 +49,13 @@ def get_mock_news() -> list:
 def test_feishu(news_list):
     """测试飞书通知"""
     config = get_config()
-    if not config.feishu.enabled or not config.feishu.webhook_url:
+    if not config.feishu.enabled or not config.feishu.webhook_urls:
         logger.warning("飞书通知未配置，跳过测试")
         return False
 
     logger.info("正在测试飞书通知...")
     try:
-        notifier = FeishuNotifier(config.feishu.webhook_url)
+        notifier = FeishuNotifier(config.feishu.webhook_urls)
         result = notifier.send(news_list, title=f"测试通知 - {datetime.now().strftime('%Y-%m-%d %H:%M')}")
         if result:
             logger.info("✅ 飞书通知发送成功")
