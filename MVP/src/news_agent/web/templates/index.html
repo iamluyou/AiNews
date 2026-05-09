@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Agent 管理界面</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Agent 管理界面</h1>
+        </header>
+
+        <main>
+            <div class="top-row">
+                <section class="card scheduler-status-card">
+                    <h2>新闻爬虫状态</h2>
+                    <div class="status-display">
+                        <span class="status-indicator" id="schedulerStatusIndicator"></span>
+                        <span class="status-text" id="schedulerStatusText">检查中...</span>
+                    </div>
+                </section>
+
+                <section class="card scheduler-control-card">
+                    <h2>新闻爬虫开关</h2>
+                    <div class="toggle-container">
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="schedulerToggleSwitch">
+                            <span class="slider"></span>
+                        </label>
+                        <span class="toggle-label" id="schedulerToggleLabel">启动爬虫</span>
+                    </div>
+                    <button id="schedulerRefreshBtn" class="btn secondary">刷新</button>
+                </section>
+
+                <section class="card logs-toggle-card">
+                    <h2>日志信息</h2>
+                    <button id="toggleLogsBtn" class="btn toggle-btn">显示日志</button>
+                </section>
+            </div>
+
+            <section class="card config-card">
+                <h2>新闻爬虫配置</h2>
+                <div class="config-grid">
+                    <div class="config-item">
+                        <label for="cronTimes">定时时间</label>
+                        <input type="text" id="cronTimes" placeholder="08:30, 11:30, 17:30">
+                    </div>
+                    <div class="config-item">
+                        <label for="emailRecipients">收件人</label>
+                        <input type="text" id="emailRecipients" placeholder="a@example.com, b@example.com">
+                    </div>
+                    <div class="config-item">
+                        <label for="emailEnabled">启用邮件</label>
+                        <div class="checkbox-container">
+                            <input type="checkbox" id="emailEnabled">
+                            <span class="checkbox-label" id="emailEnabledLabel">是</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="config-buttons">
+                    <button id="loadConfigBtn" class="btn secondary">加载配置</button>
+                    <button id="saveConfigBtn" class="btn toggle-btn">保存配置</button>
+                    <button id="fetchNewsBtn" class="btn fetch-btn">获取新闻</button>
+                </div>
+                <div id="configMessage" class="config-message"></div>
+            </section>
+
+            <section class="card logs-full-card">
+                <div id="logsContainer" class="logs-container hidden">
+                    <div id="logsContent" class="logs-content"></div>
+                </div>
+            </section>
+        </main>
+
+        <footer>
+            <p>Powered by Flask</p>
+        </footer>
+    </div>
+
+    <script>
+        const toggleLogsBtn = document.getElementById('toggleLogsBtn');
+        const logsContainer = document.getElementById('logsContainer');
+        const logsContent = document.getElementById('logsContent');
+
+        const schedulerStatusIndicator = document.getElementById('schedulerStatusIndicator');
+        const schedulerStatusText = document.getElementById('schedulerStatusText');
+        const schedulerToggleSwitch = document.getElementById('schedulerToggleSwitch');
+        const schedulerToggleLabel = document.getElementById('schedulerToggleLabel');
+        const schedulerRefreshBtn = document.getElementById('schedulerRefreshBtn');
+
+        const cronTimes = document.getElementById('cronTimes');
+        const emailRecipients = document.getElementById('emailRecipients');
+        const emailEnabled = document.getElementById('emailEnabled');
+        const emailEnabledLabel = document.getElementById('emailEnabledLabel');
+        const loadConfigBtn = document.getElementById('loadConfigBtn');
+        const saveConfigBtn = document.getElementById('saveConfigBtn');
+        const configMessage = document.getElementById('configMessage');
+        let configSaveStatusInterval = null;
+
+        let currentSchedulerStatus = { running: false };
+        let logsVisible = false;
+        let eventSource = null;
+        let isUpdatingSchedulerToggle = false;
+
+        function updateSchedulerStatus(status) {
+            currentSchedulerStatus = status;
+            if (status.running) {
+                schedulerStatusIndicator.className = 'status-indicator online';
+                schedulerStatusText.textContent = '运行中';
+            } else {
+                schedulerStatusIndicator.className = 'status-indicator offline';
+                schedulerStatusText.textContent = '已停止';
+            }
+            isUpdatingSchedulerToggle = true;
+            schedulerToggleSwitch.checked = status.running;
+            schedulerToggleLabel.textContent = status.running ? '停止爬虫' : '启动爬虫';
+            isUpdatingSchedulerToggle = false;
+        }
+
+        async function fetchSchedulerStatus() {
+            try {
+                const response = await fetch('/api/scheduler/status');
+                const data = await response.json();
+                updateSchedulerStatus(data);
+            } catch (error) {
+                console.error('Failed to fetch scheduler status:', error);
+            }
+        }
+
+        async function startScheduler() {
+            try {
+                const response = await fetch('/api/scheduler/start', { method: 'POST' });
+                const data = await response.json();
+                updateSchedulerStatus(data);
+            } catch (error) {
+                console.error('Failed to start scheduler:', error);
+                fetchSchedulerStatus();
+            }
+        }
+
+        async function stopScheduler() {
+            try {
+                const response = await fetch('/api/scheduler/stop', { method: 'POST' });
+                const data = await response.json();
+                updateSchedulerStatus(data);
+            } catch (error) {
+                console.error('Failed to stop scheduler:', error);
+                fetchSchedulerStatus();
+            }
+        }
+
+        schedulerToggleSwitch.addEventListener('change', () => {
+            if (isUpdatingSchedulerToggle) return;
+            if (schedulerToggleSwitch.checked) {
+                startScheduler();
+            } else {
+                stopScheduler();
+            }
+        });
+
+        schedulerRefreshBtn.addEventListener('click', fetchSchedulerStatus);
+
+        toggleLogsBtn.addEventListener('click', () => {
+            logsVisible = !logsVisible;
+            if (logsVisible) {
+                logsContainer.classList.remove('hidden');
+                toggleLogsBtn.textContent = '隐藏日志';
+                startLogStream();
+            } else {
+                logsContainer.classList.add('hidden');
+                toggleLogsBtn.textContent = '显示日志';
+                stopLogStream();
+            }
+        });
+
+        function startLogStream() {
+            if (eventSource) {
+                eventSource.close();
+            }
+            logsContent.innerHTML = '';
+            eventSource = new EventSource('/api/logs/stream');
+            eventSource.onmessage = function(event) {
+                const logLine = document.createElement('div');
+                logLine.className = 'log-line';
+                logLine.innerHTML = event.data;
+                logsContent.appendChild(logLine);
+                logsContent.scrollTop = logsContent.scrollHeight;
+            };
+            eventSource.onerror = function(error) {
+                console.error('EventSource failed:', error);
+                eventSource.close();
+                setTimeout(() => {
+                    if (logsVisible) {
+                        startLogStream();
+                    }
+                }, 5000);
+            };
+        }
+
+        function stopLogStream() {
+            if (eventSource) {
+                eventSource.close();
+                eventSource = null;
+            }
+        }
+
+        function showConfigMessage(message, isError = false) {
+            configMessage.textContent = message;
+            configMessage.className = 'config-message ' + (isError ? 'error' : 'success');
+            setTimeout(() => {
+                configMessage.textContent = '';
+                configMessage.className = 'config-message';
+            }, 3000);
+        }
+
+        async function loadConfig() {
+            try {
+                const response = await fetch('/api/config');
+                const data = await response.json();
+                if (data.error) {
+                    showConfigMessage('加载失败: ' + data.error, true);
+                    return;
+                }
+                cronTimes.value = data.cron_times || '';
+                emailRecipients.value = data.email_recipients || '';
+                emailEnabled.checked = data.email_enabled;
+                emailEnabledLabel.textContent = data.email_enabled ? '是' : '否';
+                showConfigMessage('配置加载成功');
+            } catch (error) {
+                console.error('Failed to load config:', error);
+                showConfigMessage('加载失败: ' + error.message, true);
+            }
+        }
+
+        async function saveConfig() {
+            try {
+                const response = await fetch('/api/config', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        cron_times: cronTimes.value,
+                        email_recipients: emailRecipients.value,
+                        email_enabled: emailEnabled.checked
+                    })
+                });
+                const data = await response.json();
+                if (data.success) {
+                    showConfigMessage('正在保存配置...');
+                    saveConfigBtn.disabled = true;
+                    saveConfigBtn.textContent = '保存中...';
+                    // 开始轮询状态
+                    configSaveStatusInterval = setInterval(checkConfigSaveStatus, 1000);
+                } else {
+                    showConfigMessage(data.message || '保存失败', true);
+                }
+            } catch (error) {
+                console.error('Failed to save config:', error);
+                showConfigMessage('保存失败: ' + error.message, true);
+            }
+        }
+
+        async function checkConfigSaveStatus() {
+            try {
+                const response = await fetch('/api/config-save-status');
+                const data = await response.json();
+                if (!data.running) {
+                    clearInterval(configSaveStatusInterval);
+                    configSaveStatusInterval = null;
+                    saveConfigBtn.disabled = false;
+                    saveConfigBtn.textContent = '保存配置';
+                    if (data.last_result) {
+                        if (data.last_result.success) {
+                            showConfigMessage('配置保存成功');
+                        } else {
+                            showConfigMessage('保存失败: ' + (data.last_result.error || '未知错误'), true);
+                        }
+                    }
+                }
+            } catch (error) {
+                console.error('Failed to check config save status:', error);
+            }
+        }
+
+        emailEnabled.addEventListener('change', () => {
+            emailEnabledLabel.textContent = emailEnabled.checked ? '是' : '否';
+        });
+
+        loadConfigBtn.addEventListener('click', loadConfig);
+        saveConfigBtn.addEventListener('click', saveConfig);
+
+        const fetchNewsBtn = document.getElementById('fetchNewsBtn');
+        let fetchStatusInterval = null;
+
+        async function fetchNews() {
+            try {
+                const response = await fetch('/api/fetch-news', { method: 'POST' });
+                const data = await response.json();
+                if (data.success) {
+                    showConfigMessage('正在获取新闻...');
+                    fetchNewsBtn.disabled = true;
+                    fetchNewsBtn.textContent = '获取中...';
+                    // 开始轮询状态
+                    fetchStatusInterval = setInterval(checkFetchStatus, 1000);
+                } else {
+                    showConfigMessage(data.message || '获取失败', true);
+                }
+            } catch (error) {
+                console.error('Failed to fetch news:', error);
+                showConfigMessage('获取失败: ' + error.message, true);
+            }
+        }
+
+        async function checkFetchStatus() {
+            try {
+                const response = await fetch('/api/fetch-status');
+                const data = await response.json();
+                if (!data.running) {
+                    clearInterval(fetchStatusInterval);
+                    fetchStatusInterval = null;
+                    fetchNewsBtn.disabled = false;
+                    fetchNewsBtn.textContent = '获取新闻';
+                    if (data.last_result) {
+                        if (data.last_result.success) {
+                            showConfigMessage('新闻获取完成');
+                        } else {
+                            showConfigMessage('新闻获取失败: ' + (data.last_result.error || '未知错误'), true);
+                        }
+                    }
+                }
+            } catch (error) {
+                console.error('Failed to check fetch status:', error);
+            }
+        }
+
+        fetchNewsBtn.addEventListener('click', fetchNews);
+
+        fetchSchedulerStatus();
+        loadConfig();
+        setInterval(fetchSchedulerStatus, 5000);
+    </script>
+</body>
+</html>
