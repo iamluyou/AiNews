@@ -12,9 +12,10 @@ if str(src_path) not in sys.path:
 
 from news_agent.config import get_config
 from news_agent.models.news import NewsItem
-from news_agent.notifiers import FeishuNotifier, Email163Notifier
+from news_agent.notifiers import create_notifiers_from_config
+from news_agent.llm import create_llm_from_config
+from news_agent.pipeline import process_and_notify
 from news_agent.storage import init_db, NewsRepository
-from news_agent.llm import OpenAIClient
 from news_agent.utils.logger import get_logger, setup_logger
 
 logger = get_logger("run_mock")
@@ -92,47 +93,29 @@ def run_with_mock():
     NewsRepository.add_batch(all_news)
     logger.info("Mock 新闻已存储到数据库")
 
-    # 发送飞书通知
-    if config.feishu.enabled and config.feishu.webhook_urls:
-        logger.info("正在发送飞书通知...")
+    # 通过工厂函数初始化组件
+    notifiers = create_notifiers_from_config(config)
+    llm = create_llm_from_config(config)
+
+    # 发送通知（LLM 处理前的原始新闻）
+    now_str = datetime.now().strftime('%Y-%m-%d %H:%M')
+    for notifier in notifiers:
         try:
-            notifier = FeishuNotifier(config.feishu.webhook_urls)
-            notifier.send(all_news, title=f"Mock 新闻推送 - {datetime.now().strftime('%Y-%m-%d %H:%M')}")
-            logger.info("✅ 飞书通知发送成功")
+            notifier.send(all_news, title=f"Mock {notifier.default_title} - {now_str}")
+            logger.info(f"✅ {notifier.name} 通知发送成功")
         except Exception as e:
-            logger.error(f"❌ 飞书通知发送失败: {e}")
+            logger.error(f"❌ {notifier.name} 通知发送失败: {e}")
 
     # LLM 处理
     processed_news = all_news
-    if config.llm.api_key:
+    if llm:
         logger.info("正在使用 LLM 整理新闻...")
         try:
-            llm = OpenAIClient(
-                base_url=config.llm.base_url,
-                api_key=config.llm.api_key,
-                model=config.llm.model,
-                max_retries=config.llm.max_retries,
-                timeout=config.llm.timeout,
-            )
             processed_news = llm.process_news(all_news)
             logger.info(f"✅ LLM 处理完成，剩余 {len(processed_news)} 条新闻")
         except Exception as e:
             logger.error(f"❌ LLM 处理失败: {e}")
             processed_news = all_news
-
-    # 发送邮件通知
-    if config.email_163.enabled and config.email_163.sender:
-        logger.info("正在发送邮件通知...")
-        try:
-            notifier = Email163Notifier(
-                sender=config.email_163.sender,
-                password=config.email_163.password,
-                recipients=config.email_163.recipients,
-            )
-            notifier.send(processed_news, title=f"Mock AI 新闻整理 - {datetime.now().strftime('%Y-%m-%d %H:%M')}")
-            logger.info("✅ 邮件通知发送成功")
-        except Exception as e:
-            logger.error(f"❌ 邮件通知发送失败: {e}")
 
     logger.info("=" * 50)
     logger.info("Mock 任务执行完成")

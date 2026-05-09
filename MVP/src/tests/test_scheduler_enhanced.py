@@ -10,6 +10,11 @@ from news_agent.scheduler import (
     _last_heartbeat,
 )
 from news_agent.models.news import NewsItem
+from news_agent.pipeline import (
+    create_crawlers,
+    fetch_all_news,
+    process_and_notify,
+)
 
 
 class TestSleepDetection:
@@ -156,18 +161,16 @@ class TestSchedulerInitWithFactories:
 
     @patch("news_agent.scheduler.create_notifiers_from_config")
     @patch("news_agent.scheduler.create_llm_from_config")
+    @patch("news_agent.scheduler.create_crawlers")
     @patch("news_agent.scheduler.get_config")
     @patch("news_agent.scheduler.setup_logger")
     @patch("news_agent.scheduler.init_db")
-    def test_uses_notifier_factory(self, mock_db, mock_log, mock_config, mock_llm_factory, mock_notifier_factory):
+    def test_uses_notifier_factory(self, mock_db, mock_log, mock_config, mock_crawlers_factory, mock_llm_factory, mock_notifier_factory):
         """验证 scheduler 使用工厂函数创建通知器"""
         from news_agent.scheduler import NewsScheduler
 
         mock_cfg = Mock()
         mock_cfg.scheduler.timezone = "Asia/Shanghai"
-        mock_cfg.crawlers.enabled = []
-        mock_cfg.crawlers.timeout = 30
-        mock_cfg.crawlers.request_delay = 0.1
         mock_cfg.logging.file_path = "/tmp/test.log"
         mock_cfg.logging.level = "INFO"
         mock_config.return_value = mock_cfg
@@ -176,6 +179,7 @@ class TestSchedulerInitWithFactories:
         mock_notifier.name = "test_notifier"
         mock_notifier_factory.return_value = [mock_notifier]
         mock_llm_factory.return_value = None
+        mock_crawlers_factory.return_value = []
 
         scheduler = NewsScheduler()
         mock_notifier_factory.assert_called_once_with(mock_cfg)
@@ -183,18 +187,16 @@ class TestSchedulerInitWithFactories:
 
     @patch("news_agent.scheduler.create_notifiers_from_config")
     @patch("news_agent.scheduler.create_llm_from_config")
+    @patch("news_agent.scheduler.create_crawlers")
     @patch("news_agent.scheduler.get_config")
     @patch("news_agent.scheduler.setup_logger")
     @patch("news_agent.scheduler.init_db")
-    def test_uses_llm_factory(self, mock_db, mock_log, mock_config, mock_llm_factory, mock_notifier_factory):
+    def test_uses_llm_factory(self, mock_db, mock_log, mock_config, mock_crawlers_factory, mock_llm_factory, mock_notifier_factory):
         """验证 scheduler 使用工厂函数创建 LLM"""
         from news_agent.scheduler import NewsScheduler
 
         mock_cfg = Mock()
         mock_cfg.scheduler.timezone = "Asia/Shanghai"
-        mock_cfg.crawlers.enabled = []
-        mock_cfg.crawlers.timeout = 30
-        mock_cfg.crawlers.request_delay = 0.1
         mock_cfg.logging.file_path = "/tmp/test.log"
         mock_cfg.logging.level = "INFO"
         mock_config.return_value = mock_cfg
@@ -202,6 +204,7 @@ class TestSchedulerInitWithFactories:
         mock_llm = Mock()
         mock_llm_factory.return_value = mock_llm
         mock_notifier_factory.return_value = []
+        mock_crawlers_factory.return_value = []
 
         scheduler = NewsScheduler()
         mock_llm_factory.assert_called_once_with(mock_cfg)

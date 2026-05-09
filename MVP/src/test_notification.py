@@ -13,7 +13,7 @@ if str(src_path) not in sys.path:
 
 from news_agent.config import get_config
 from news_agent.models.news import NewsItem
-from news_agent.notifiers import FeishuNotifier, Email163Notifier
+from news_agent.notifiers import create_notifiers_from_config
 from news_agent.utils.logger import get_logger, setup_logger
 
 logger = get_logger("test_notification")
@@ -46,54 +46,6 @@ def get_mock_news() -> list:
     ]
 
 
-def test_feishu(news_list):
-    """测试飞书通知"""
-    config = get_config()
-    if not config.feishu.enabled or not config.feishu.webhook_urls:
-        logger.warning("飞书通知未配置，跳过测试")
-        return False
-
-    logger.info("正在测试飞书通知...")
-    try:
-        notifier = FeishuNotifier(config.feishu.webhook_urls)
-        result = notifier.send(news_list, title=f"测试通知 - {datetime.now().strftime('%Y-%m-%d %H:%M')}")
-        if result:
-            logger.info("✅ 飞书通知发送成功")
-            return True
-        else:
-            logger.error("❌ 飞书通知发送失败")
-            return False
-    except Exception as e:
-        logger.error(f"❌ 飞书通知异常: {e}")
-        return False
-
-
-def test_email(news_list):
-    """测试邮件通知"""
-    config = get_config()
-    if not config.email_163.enabled or not config.email_163.sender:
-        logger.warning("邮件通知未配置，跳过测试")
-        return False
-
-    logger.info("正在测试邮件通知...")
-    try:
-        notifier = Email163Notifier(
-            sender=config.email_163.sender,
-            password=config.email_163.password,
-            recipients=config.email_163.recipients,
-        )
-        result = notifier.send(news_list, title=f"AI 新闻整理测试 - {datetime.now().strftime('%Y-%m-%d %H:%M')}")
-        if result:
-            logger.info("✅ 邮件通知发送成功")
-            return True
-        else:
-            logger.error("❌ 邮件通知发送失败")
-            return False
-    except Exception as e:
-        logger.error(f"❌ 邮件通知异常: {e}")
-        return False
-
-
 def main():
     """主函数"""
     config = get_config()
@@ -106,21 +58,33 @@ def main():
     news_list = get_mock_news()
     logger.info(f"使用 {len(news_list)} 条模拟新闻进行测试")
 
+    # 通过工厂函数创建通知器
+    notifiers = create_notifiers_from_config(config)
+
+    if not notifiers:
+        logger.warning("没有可用的通知器，请检查配置")
+        return
+
     success_count = 0
-    total_count = 0
+    now_str = datetime.now().strftime('%Y-%m-%d %H:%M')
 
-    # 测试飞书
-    total_count += 1
-    if test_feishu(news_list):
-        success_count += 1
-
-    # 测试邮件
-    total_count += 1
-    if test_email(news_list):
-        success_count += 1
+    for notifier in notifiers:
+        try:
+            logger.info(f"正在测试 {notifier.name} 通知...")
+            result = notifier.send(
+                news_list,
+                title=f"测试 {notifier.default_title} - {now_str}",
+            )
+            if result:
+                logger.info(f"✅ {notifier.name} 通知发送成功")
+                success_count += 1
+            else:
+                logger.error(f"❌ {notifier.name} 通知发送失败")
+        except Exception as e:
+            logger.error(f"❌ {notifier.name} 通知异常: {e}")
 
     logger.info("=" * 50)
-    logger.info(f"测试完成: {success_count}/{total_count} 成功")
+    logger.info(f"测试完成: {success_count}/{len(notifiers)} 成功")
     logger.info("=" * 50)
 
 

@@ -73,8 +73,9 @@ class TestNewsScheduler:
     @patch("news_agent.scheduler.get_config")
     @patch("news_agent.scheduler.setup_logger")
     @patch("news_agent.scheduler.init_db")
-    @patch("news_agent.scheduler.NewsRepository")
-    def test_run_job_no_news(self, mock_repo, mock_init_db, mock_setup_logger, mock_get_config, mock_config):
+    @patch("news_agent.scheduler.fetch_all_news", return_value=[])
+    @patch("news_agent.scheduler.process_and_notify")
+    def test_run_job_no_news(self, mock_process, mock_fetch, mock_init_db, mock_setup_logger, mock_get_config, mock_config):
         """测试无新闻的情况"""
         mock_get_config.return_value = mock_config
 
@@ -84,12 +85,9 @@ class TestNewsScheduler:
         scheduler.notifiers = []
         scheduler.llm = None
 
-        with patch.object(scheduler, '_setup_logging'), \
-             patch.object(scheduler, '_init_database'), \
-             patch.object(scheduler, '_init_components'):
-            # 模拟没有新闻
-            result = []
-            assert len(result) == 0
+        scheduler._run_job_inner(datetime.now())
+        mock_fetch.assert_called_once()
+        mock_process.assert_called_once_with([], [], None)
 
     def test_deduplication_logic(self, sample_news_items):
         """测试去重逻辑（与 scheduler 中一致的逻辑）"""
