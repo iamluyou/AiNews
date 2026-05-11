@@ -60,22 +60,12 @@ class TestCatchupLogic:
     @patch("news_agent.scheduler.get_config")
     @patch("news_agent.scheduler.setup_logger")
     @patch("news_agent.scheduler.init_db")
-    def test_should_run_catchup_near_cron_time(self, mock_db, mock_log, mock_config):
-        """当前时间在 cron 时间附近应触发补偿"""
+    def test_should_run_catchup_missed_cron(self, mock_db, mock_log, mock_config):
+        """当前时间已过 cron 时间 30 分钟以上，应触发补偿"""
         from news_agent.scheduler import NewsScheduler
 
         mock_cfg = Mock()
-        mock_cfg.scheduler.cron_times = ["09:30", "17:30"]
         mock_cfg.scheduler.timezone = "Asia/Shanghai"
-        mock_cfg.scheduler.job_timeout = 300
-        mock_cfg.crawlers.enabled = []
-        mock_cfg.crawlers.timeout = 30
-        mock_cfg.crawlers.request_delay = 0.1
-        mock_cfg.llm.api_key = ""
-        mock_cfg.feishu.enabled = False
-        mock_cfg.feishu.webhook_urls = []
-        mock_cfg.email_163.enabled = False
-        mock_cfg.email_163.sender = ""
         mock_cfg.logging.file_path = "/tmp/test.log"
         mock_cfg.logging.level = "INFO"
         mock_config.return_value = mock_cfg
@@ -83,18 +73,45 @@ class TestCatchupLogic:
         scheduler = NewsScheduler.__new__(NewsScheduler)
         scheduler.config = mock_cfg
 
-        # 用一个固定的 cron 时间测试
         now = datetime.now()
-        current_minutes = now.hour * 60 + now.minute
-
-        # 构造一个在当前时间 30 分钟内的 cron 时间
-        cron_hour = now.hour
-        cron_minute = max(0, now.minute - 30)
+        # 构造一个已过去 60 分钟的 cron 时间（安全地处理跨小时）
+        total_minutes = now.hour * 60 + now.minute
+        cron_total = total_minutes - 60
+        cron_hour = cron_total // 60
+        cron_minute = cron_total % 60
         mock_cfg.scheduler.cron_times = [f"{cron_hour:02d}:{cron_minute:02d}"]
 
         result = scheduler._should_run_catchup()
-        # 当前时间与 cron 时间差 30 分钟，在 2 小时窗口内
+        # 已过 cron 时间 60 分钟（30 < 60 ≤ 120），应触发补偿
         assert result is True
+
+    @patch("news_agent.scheduler.get_config")
+    @patch("news_agent.scheduler.setup_logger")
+    @patch("news_agent.scheduler.init_db")
+    def test_should_not_catchup_near_next_cron(self, mock_db, mock_log, mock_config):
+        """当前时间距 cron 时间 ≤30 分钟，不应补偿（cron job 即将触发）"""
+        from news_agent.scheduler import NewsScheduler
+
+        mock_cfg = Mock()
+        mock_cfg.scheduler.timezone = "Asia/Shanghai"
+        mock_cfg.logging.file_path = "/tmp/test.log"
+        mock_cfg.logging.level = "INFO"
+        mock_config.return_value = mock_cfg
+
+        scheduler = NewsScheduler.__new__(NewsScheduler)
+        scheduler.config = mock_cfg
+
+        now = datetime.now()
+        # 构造一个刚过去 15 分钟的 cron 时间
+        total_minutes = now.hour * 60 + now.minute
+        cron_total = total_minutes - 15
+        cron_hour = cron_total // 60
+        cron_minute = cron_total % 60
+        mock_cfg.scheduler.cron_times = [f"{cron_hour:02d}:{cron_minute:02d}"]
+
+        result = scheduler._should_run_catchup()
+        # 已过 cron 时间仅 15 分钟（≤30），cron job 可能即将触发，不应补偿
+        assert result is False
 
     @patch("news_agent.scheduler.get_config")
     @patch("news_agent.scheduler.setup_logger")

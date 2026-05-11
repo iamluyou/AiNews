@@ -131,15 +131,17 @@ class NewsScheduler:
         logger.info("=" * 50)
 
     def _should_run_catchup(self) -> bool:
-        """判断是否需要补偿执行：当前时间是否在某个 cron 时间点附近（±2小时）"""
+        """判断是否需要补偿执行：当前时间距最近的 cron 时间点超过阈值（即错过了）"""
         now = datetime.now()
         current_minutes = now.hour * 60 + now.minute
 
         for cron_time in self.config.scheduler.cron_times:
             hour, minute = cron_time.split(":")
             cron_minutes = int(hour) * 60 + int(minute)
-            diff = abs(current_minutes - cron_minutes)
-            if diff <= 120:
+            # 只检查已过去的 cron 时间点（当前时间已超过 cron 时间）
+            # 如果距下一个 cron 时间很近（≤30分钟），说明 cron job 即将触发，不需要 catchup
+            diff = current_minutes - cron_minutes
+            if 30 < diff <= 120:
                 return True
         return False
 
@@ -157,14 +159,10 @@ class NewsScheduler:
             )
             logger.info(f"Scheduled job at {cron_time}")
 
-        # 启动时补偿执行
+        # 启动时补偿执行（仅当距下一个 cron 时间较远时才补偿）
         if self._should_run_catchup():
             logger.info("Startup catch-up: running missed job now")
-            self.scheduler.add_job(
-                self.run_job,
-                name="CatchUpJob",
-                misfire_grace_time=7200,
-            )
+            self.run_job()
 
         # 休眠检测心跳
         self.scheduler.add_job(
@@ -185,20 +183,7 @@ class NewsScheduler:
         if _check_sleep_recovery():
             if self._should_run_catchup():
                 logger.info("Sleep recovery: scheduling catch-up job")
-                try:
-                    existing_jobs = self.scheduler.get_jobs()
-                    has_pending = any(
-                        j.name in ("NewsJob-catchup", "CatchUpJob") and j.next_run_time
-                        for j in existing_jobs
-                    )
-                    if not has_pending:
-                        self.scheduler.add_job(
-                            self.run_job,
-                            name="NewsJob-catchup",
-                            misfire_grace_time=7200,
-                        )
-                except Exception as e:
-                    logger.error(f"Failed to schedule catch-up job: {e}")
+                self.run_job()
 
 
 def main():
