@@ -6,7 +6,7 @@ cd "$(dirname "$0")"
 # 创建 logs 目录
 mkdir -p logs
 
-# 检查是否已经在运行
+# 检查是否已经在运行（PID 文件 + 进程扫描双重检查）
 if [ -f logs/scheduler.pid ]; then
     PID=$(cat logs/scheduler.pid 2>/dev/null)
     if [ -n "$PID" ] && kill -0 $PID 2>/dev/null; then
@@ -14,6 +14,15 @@ if [ -f logs/scheduler.pid ]; then
         exit 1
     fi
     rm -f logs/scheduler.pid
+fi
+
+# 兜底：检查是否有残留的 main.py 进程
+EXISTING=$(pgrep -f "news_agent/main.py" 2>/dev/null)
+if [ -n "$EXISTING" ]; then
+    echo "Found existing scheduler processes:"
+    echo "$EXISTING" | while read pid; do ps -p $pid -o pid,etime,command 2>/dev/null; done
+    echo "Run stop_scheduler.sh first to clean up."
+    exit 1
 fi
 
 # 创建守护脚本（脱离终端运行）

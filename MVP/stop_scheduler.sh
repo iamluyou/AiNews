@@ -1,44 +1,45 @@
 #!/bin/bash
-# 停止新闻爬虫调度器（杀掉整个守护进程组）
+# 停止新闻爬虫调度器（杀掉所有相关进程）
 
 cd "$(dirname "$0")"
 
-if [ ! -f logs/scheduler.pid ]; then
-    echo "PID file not found. Is scheduler running?"
-    exit 1
-fi
+STOPPED=0
 
-PID=$(cat logs/scheduler.pid 2>/dev/null)
-
-if [ -z "$PID" ]; then
-    echo "PID file is empty."
-    exit 1
-fi
-
-if ! kill -0 $PID 2>/dev/null; then
-    echo "Process $PID is not running."
-    rm -f logs/scheduler.pid
-    exit 1
-fi
-
-echo "Stopping scheduler (PID: $PID)..."
-
-# 杀掉整个进程组（setsid 创建的会话）
-# 先尝试优雅关闭
-kill -- -$PID 2>/dev/null || kill $PID 2>/dev/null
-
-# 等待进程停止
-for i in {1..10}; do
-    if ! kill -0 $PID 2>/dev/null; then
-        echo "✅ Scheduler stopped."
-        rm -f logs/scheduler.pid logs/_guard_*.sh
-        exit 0
+# 1. 如果有 PID 文件，先按 PID 文件杀
+if [ -f logs/scheduler.pid ]; then
+    PID=$(cat logs/scheduler.pid 2>/dev/null)
+    if [ -n "$PID" ] && kill -0 $PID 2>/dev/null; then
+        echo "Stopping guard process (PID: $PID)..."
+        kill -- -$PID 2>/dev/null || kill $PID 2>/dev/null
+        sleep 1
+        kill -9 -- -$PID 2>/dev/null || kill -9 $PID 2>/dev/null 2>/dev/null
+        STOPPED=1
     fi
-    sleep 1
-done
+fi
 
-# 强制停止
-echo "Force stopping scheduler..."
-kill -9 -- -$PID 2>/dev/null || kill -9 $PID 2>/dev/null
+# 2. 兜底：杀掉所有 main.py / _guard.sh / caffeinate 相关进程
+ORPHANS=$(pgrep -f "news_agent/main.py" 2>/dev/null)
+if [ -n "$ORPHANS" ]; then
+    echo "Found orphan scheduler processes, stopping..."
+    echo "$ORPHANS" | xargs kill 2>/dev/null
+    sleep 1
+    echo "$ORPHANS" | xargs kill -9 2>/dev/null
+    STOPPED=1
+fi
+
+GUARD_ORPHANS=$(pgrep -f "_guard.sh" 2>/dev/null)
+if [ -n "$GUARD_ORPHANS" ]; then
+    echo "$GUARD_ORPHANS" | xargs kill 2>/dev/null
+    sleep 1
+    echo "$GUARD_ORPHANS" | xargs kill -9 2>/dev/null
+    STOPPED=1
+fi
+
+# 3. 清理
 rm -f logs/scheduler.pid logs/_guard_*.sh
-echo "Scheduler force stopped."
+
+if [ $STOPPED -eq 1 ]; then
+    echo "✅ Scheduler stopped."
+else
+    echo "No scheduler processes found."
+fi
