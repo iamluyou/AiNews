@@ -121,12 +121,15 @@ def process_and_notify(
     now_str = datetime.now().strftime('%Y-%m-%d %H:%M')
     for notifier in notifiers:
         try:
-            notifier.send(
+            result = notifier.send(
                 processed_news,
                 title=f"{notifier.default_title} - {now_str}",
                 used_llm=used_llm,
             )
-            logger.info(f"{notifier.name} 通知发送成功")
+            if result:
+                logger.info(f"{notifier.name} 通知发送成功")
+            else:
+                logger.warning(f"{notifier.name} 通知部分失败")
         except Exception as e:
             logger.error(f"Failed to send {notifier.name} notification: {e}")
 

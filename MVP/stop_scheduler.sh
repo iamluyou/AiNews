@@ -35,7 +35,16 @@ if [ -n "$GUARD_ORPHANS" ]; then
     STOPPED=1
 fi
 
-# 3. 清理
+# 3. 等待进程完全退出
+for i in {1..10}; do
+    REMAINING=$(pgrep -f "news_agent/main.py" 2>/dev/null)
+    if [ -z "$REMAINING" ]; then
+        break
+    fi
+    sleep 1
+done
+
+# 4. 清理
 rm -f logs/scheduler.pid logs/_guard_*.sh
 
 if [ $STOPPED -eq 1 ]; then

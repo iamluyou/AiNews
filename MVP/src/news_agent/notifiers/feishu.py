@@ -1,3 +1,4 @@
+import time
 from typing import List
 import json
 
@@ -14,6 +15,9 @@ class FeishuNotifier(BaseNotifier):
     """飞书 Webhook 通知"""
 
     name = "feishu"
+
+    # 飞书频率限制错误码
+    FREQUENCY_LIMIT_CODES = {11232, 11233}
 
     def __init__(self, webhook_urls: List[str]):
         if isinstance(webhook_urls, str):
@@ -41,31 +45,49 @@ class FeishuNotifier(BaseNotifier):
                 }
             }
 
-            success = True
+            success_count = 0
             for url in self.webhook_urls:
-                try:
-                    response = requests.post(
-                        url,
-                        json=data,
-                        timeout=30
-                    )
-                    response.raise_for_status()
+                if self._send_with_retry(url, data):
+                    success_count += 1
 
-                    result = response.json()
-                    if result.get("code") != 0:
-                        logger.error(f"Feishu notification failed for {url}: {result}")
-                        success = False
-                except Exception as e:
-                    logger.error(f"Failed to send feishu notification to {url}: {e}")
-                    success = False
-
-            if success:
-                logger.info(f"Feishu notification sent successfully to {len(self.webhook_urls)} webhooks")
-            return success
+            if success_count == len(self.webhook_urls):
+                logger.info(f"Feishu notification sent successfully to all {success_count} webhooks")
+                return True
+            elif success_count > 0:
+                logger.warning(f"Feishu notification sent to {success_count}/{len(self.webhook_urls)} webhooks")
+                return False
+            else:
+                logger.error("Feishu notification failed for all webhooks")
+                return False
 
         except Exception as e:
             logger.error(f"Failed to send feishu notification: {e}")
             return False
+
+    def _send_with_retry(self, url: str, data: dict, max_retries: int = 2) -> bool:
+        """发送请求，频率限制时自动重试"""
+        for attempt in range(max_retries + 1):
+            try:
+                response = requests.post(url, json=data, timeout=30)
+                response.raise_for_status()
+
+                result = response.json()
+                if result.get("code") == 0:
+                    return True
+
+                # 频率限制，等待后重试
+                if result.get("code") in self.FREQUENCY_LIMIT_CODES and attempt < max_retries:
+                    wait = 5 * (attempt + 1)
+                    logger.warning(f"Feishu rate limited for {url}, retrying in {wait}s (attempt {attempt + 1}/{max_retries})")
+                    time.sleep(wait)
+                    continue
+
+                logger.error(f"Feishu notification failed for {url}: {result}")
+                return False
+            except Exception as e:
+                logger.error(f"Failed to send feishu notification to {url}: {e}")
+                return False
+        return False
 
     def _build_text_message(self, news_list: List[NewsItem], title: str, used_llm: bool) -> str:
         """构建简单文本消息格式 - 显示所有新闻"""
